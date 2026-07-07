@@ -1,4 +1,4 @@
-how much would the design.md cost rn: # DIY Fitness Smartwatch — Version 1 Design
+# DIY Fitness Smartwatch — Version 1 Design
 
 ## Overview
 
