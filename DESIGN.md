@@ -1,4 +1,4 @@
-how much would the design.md cost rn: # DIY Fitness Smartwatch — Version 1 Design
+# DIY Fitness Smartwatch — Version 1 Design
 
 ## Overview
 
@@ -51,6 +51,18 @@ Reasons:
 * Large developer ecosystem
 * Suitable for wearable devices
 * Compatible with Zephyr RTOS and PlatformIO
+
+**Dev Board (Prototype)**
+
+* Seeed XIAO nRF52840
+
+---
+
+## Timekeeping Crystal
+
+* 32.768 kHz watch crystal (external LFCLK source)
+
+Required for accurate RTC operation. The nRF52840's internal RC oscillator drifts ~250 ppm (~20 seconds/day), making daily BLE resyncs necessary. An external 32.768 kHz crystal reduces drift to ~20 ppm (~1.7 seconds/day), acceptable for normal wearable use without frequent syncing.
 
 ---
 
@@ -138,11 +150,12 @@ Used for:
 
 * 300–500 mAh LiPo battery
 * USB-C charging
-* Battery voltage monitoring
+* Battery voltage monitoring via GPIO-switched voltage divider (divider powered only during ADC measurement to avoid continuous current drain at sleep scale)
+* LDO regulator: verify quiescent current (Iq) is compatible with sleep budget before PCB commit — AP2112K is acceptable for prototyping but lower-Iq alternatives may be needed for full battery life targets
 
 Target battery life:
 
-* 2–3 days under normal usage
+* 2–3 days under normal usage (assumes 15–25% screen-on time during active use; idle-heavy use may reach 4+ days)
 
 ---
 
@@ -261,16 +274,9 @@ Future:
 
 ## Step Counter
 
-Algorithm:
+V1 uses the BMI270's onboard hardware step-counting engine. The sensor runs the algorithm internally and raises an interrupt on each detected step, keeping the MCU fully asleep between events and drawing only ~3.5 µA.
 
-1. Read accelerometer at approximately 50–100 Hz
-2. Filter gravity and noise
-3. Calculate acceleration magnitude
-4. Use adaptive peak detection
-5. Validate cadence
-6. Increment step count
-
-Future revisions may utilize the BMI270's onboard step-counting engine for lower CPU usage.
+Software peak-detection on raw 50–100 Hz data is deferred to a future revision for applications requiring finer-grained cadence analysis or custom gait metrics.
 
 ---
 
@@ -310,6 +316,8 @@ Distance = Step Count × Stride Length
 
 Stride length will be user configurable.
 
+Distance is stride-based, not GPS-derived. The UI labels this readout as an estimate (e.g., "~1.92 km (est.)") so users are not misled into expecting GPS-grade accuracy.
+
 ---
 
 ## Calories
@@ -333,6 +341,11 @@ Custom GATT service will expose:
 * Battery percentage
 * Device settings
 * Workout history
+
+Security:
+
+* V1 uses an open GATT service — accepted tradeoff for prototype simplicity
+* V2 targets LE Secure Connections pairing/bonding so nearby devices cannot read workout history or write bogus time/settings
 
 Future revisions may add:
 
@@ -394,10 +407,11 @@ Logging can be disabled for production firmware.
 
 Hardware:
 
-* nRF52840 development board
-* BMI270 breakout
-* OLED display
-* LiPo battery
+* Seeed XIAO nRF52840 dev board
+* BMI270 breakout (Adafruit or SparkFun)
+* 1.3" SSD1306 OLED (SPI)
+* LiPo battery (300–500 mAh, JST-PH)
+* 32.768 kHz watch crystal
 
 Goals:
 
@@ -426,12 +440,14 @@ Goals:
 Integrate:
 
 * nRF52840
+* 32.768 kHz crystal (LFCLK)
 * BMI270
 * Battery charging
 * Display connector
 * Vibration motor
 * Programming header
 * Battery connector
+* GPIO-switched battery voltage divider
 
 ---
 

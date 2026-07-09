@@ -4,6 +4,10 @@
 
 This document describes how to test each module of the smartwatch firmware, from individual hardware verification to full system integration tests. Testing is performed on the Seeed XIAO nRF52840 development board with connected peripherals.
 
+Tests are split into two categories:
+- **Unit Tests (1–28):** Hardware-isolated, repeatable on the bench. Can be re-run cheaply after any code change.
+- **Field Tests (29–32):** Require a human wearing the device and physically walking/running. Run these when validating a firmware release, not on every change.
+
 ---
 
 ## Hardware Setup for Testing
@@ -308,14 +312,24 @@ Verify with phone:
 **Test: Time Sync**
 
 1. Connect via nRF Connect
-2. Write 8 bytes to time sync characteristic (DateTime struct)
-3. Verify watch updates its displayed time
+2. Write 7 bytes to time sync characteristic
 
 ```
-Byte layout: [year_lo, year_hi, month, day, weekday, hour, minute, second]
-Example for 2024-06-15 14:30:00 Monday:
-E8 07 06 0F 00 0E 1E 00
+Byte layout: [year_lo, year_hi, month, day, hour, minute, second]
+Example for 2024-06-15 14:30:00:
+E8 07 06 0F 0E 1E 00
 ```
+
+Note: weekday is **not** in the payload — the watch derives it internally from the date.
+
+3. Verify watch updates its displayed time and shows the correct weekday
+
+**Test: Weekday Derivation**
+
+1. Connect via nRF Connect
+2. Write a time sync for a date where Monday is the correct weekday (e.g., 2024-07-15 is a Monday)
+3. Verify the watch displays "Mon" — regardless of what any previous weekday state was
+4. This confirms the watch computes weekday from date rather than trusting the phone
 
 **Test: Disconnect/Reconnect**
 
@@ -365,7 +379,7 @@ power_reset_activity_timer();
 
 Verify current draw with multimeter:
 - Active: ~5-8mA (CPU + peripherals)
-- Sleep: < 20µA (target)
+- Sleep: < 20µA (target — see SYSTEM_ARCHITECTURE.md power budget deep-sleep row for component breakdown)
 
 **Pass Criteria:**
 - Idle timer increments correctly
@@ -447,6 +461,8 @@ DateTime back = datetime_from_epoch(epoch);
 ---
 
 ### 9. Step Counter
+
+> **Important — scope of these tests:** The simulated sine-wave tests below are *regression tests* — they catch math bugs when the peak-detection algorithm changes. They do **not** validate real-world accuracy. Synthetic data has no arm swing, gait variability, phone vibration, or driving bumps. The real accuracy bar is Field Test #29 (actual walk test). Consider recording real accelerometer logs from walking, running, typing, and driving, then replaying them as fixtures for higher-confidence regression testing.
 
 **Test: Known Step Simulation**
 
@@ -597,12 +613,24 @@ assert(workout_get_state() == WORKOUT_STOPPED);
 
 **Test: Calorie Calculation**
 
+> **Note:** Do not use `delay(3600000)` — a 1-hour blocking delay is not testable. The correct approach is to make `workout.cpp` accept an injectable `now_ms()` function pointer so tests can fast-forward time. Until that refactor is done, test calorie scaling at shorter intervals and verify proportionality.
+
 ```cpp
 workout_start(0);
-delay(3600000);  // Simulate 1 hour (or mock millis)
-workout_update(5000, ACTIVITY_WALKING, 75, 70);
-// Walking MET=3.5, 70kg, 1hr → ~245 cal
-Serial.printf("Calories: %u (expected ~245)\n", workout_get_calories());
+// Inject a fake elapsed time of 10 minutes (600 seconds)
+// workout_update internally uses millis() — you need now_ms() injection for full testing
+// For now: verify calories are non-zero and scale correctly with activity type
+workout_update(1000, ACTIVITY_WALKING, 75, 70);
+uint16_t walk_cal = workout_get_calories();
+
+workout_init();
+workout_start(0);
+workout_update(1000, ACTIVITY_RUNNING, 75, 70);
+uint16_t run_cal = workout_get_calories();
+
+// Running should give more calories than walking for same steps
+assert(run_cal > walk_cal);
+Serial.printf("Walk cal: %u  Run cal: %u\n", walk_cal, run_cal);
 ```
 
 **Pass Criteria:**
@@ -669,9 +697,26 @@ assert(ui_is_screen_on() == true);
 
 ---
 
-## Integration Tests
+## Unit Tests (1–28)
 
-### 13. Full System — Walk Test
+## Field Tests (29–33)
+
+### 29. Full System — Battery-Dead Date/Time Recovery
+
+**Procedure:**
+
+1. Let battery fully discharge (watch powers off)
+2. Recharge and power on
+3. Observe home screen before any BLE sync
+
+**Pass Criteria:**
+- Watch does NOT silently display a wrong date/time (e.g., Jan 1 2024)
+- UI shows a "Time unset — sync phone" indicator or similar stale-time warning
+- After BLE sync from phone, time displays correctly and warning clears
+
+---
+
+### 30. Full System — Walk Test
 
 **Procedure:**
 
@@ -685,7 +730,7 @@ assert(ui_is_screen_on() == true);
 - Activity shows "Walking" during walk
 - Screen displays updating step count
 
-### 14. Full System — Workout Flow
+### 31. Full System — Workout Flow
 
 **Procedure:**
 
@@ -702,7 +747,7 @@ assert(ui_is_screen_on() == true);
 - Distance reasonable for actual distance walked
 - Data persists (power cycle and check stored workouts)
 
-### 15. Full System — BLE Sync
+### 32. Full System — BLE Sync
 
 **Procedure:**
 
@@ -710,15 +755,16 @@ assert(ui_is_screen_on() == true);
 2. Connect phone via nRF Connect
 3. Read step characteristic
 4. Write time sync
-5. Verify watch clock updates
+5. Verify watch clock updates and weekday is correct
 6. Disconnect and verify advertising resumes
 
 **Pass Criteria:**
 - Step value matches watch display
 - Time syncs within 1 second
+- Weekday derived correctly from date
 - Reconnection works after disconnect
 
-### 16. Full System — Power/Battery
+### 33. Full System — Power/Battery
 
 **Procedure:**
 
@@ -785,37 +831,46 @@ assert(ui_is_screen_on() == true);
 
 ## Test Checklist Summary
 
-| # | Module | Status |
-|---|--------|--------|
-| 1 | IMU — Chip ID | ☐ |
-| 2 | IMU — Accel data | ☐ |
-| 3 | IMU — Sleep/wake | ☐ |
-| 4 | Display — Init and text | ☐ |
-| 5 | Display — Drawing | ☐ |
-| 6 | Display — Brightness/on/off | ☐ |
-| 7 | Battery — Voltage | ☐ |
-| 8 | Battery — Charging | ☐ |
-| 9 | Vibration — Pulse | ☐ |
-| 10 | Vibration — Pattern | ☐ |
-| 11 | Storage — Save/load | ☐ |
-| 12 | Storage — Persistence | ☐ |
-| 13 | Storage — Workouts | ☐ |
-| 14 | BLE — Advertising | ☐ |
-| 15 | BLE — Connect/read | ☐ |
-| 16 | BLE — Time sync | ☐ |
-| 17 | Power — Idle timer | ☐ |
-| 18 | Power — Sleep current | ☐ |
-| 19 | DateTime — Tick rollover | ☐ |
-| 20 | DateTime — Leap year | ☐ |
-| 21 | DateTime — Epoch | ☐ |
-| 22 | Step counter — Accuracy | ☐ |
-| 23 | Step counter — Noise rejection | ☐ |
-| 24 | Activity — Detection | ☐ |
-| 25 | Activity — Hysteresis | ☐ |
-| 26 | Workout — Lifecycle | ☐ |
-| 27 | UI — Screen cycling | ☐ |
-| 28 | UI — Timeout/wake | ☐ |
-| 29 | Integration — Walk test | ☐ |
-| 30 | Integration — Workout flow | ☐ |
-| 31 | Integration — BLE sync | ☐ |
-| 32 | Integration — Battery life | ☐ |
+### Unit Tests
+
+| # | Module | Date Tested | Firmware Commit | Pass/Fail |
+|---|--------|-------------|-----------------|-----------|
+| 1 | IMU — Chip ID | | | ☐ |
+| 2 | IMU — Accel data | | | ☐ |
+| 3 | IMU — Sleep/wake | | | ☐ |
+| 4 | Display — Init and text | | | ☐ |
+| 5 | Display — Drawing | | | ☐ |
+| 6 | Display — Brightness/on/off | | | ☐ |
+| 7 | Battery — Voltage | | | ☐ |
+| 8 | Battery — Charging | | | ☐ |
+| 9 | Vibration — Pulse | | | ☐ |
+| 10 | Vibration — Pattern | | | ☐ |
+| 11 | Storage — Save/load | | | ☐ |
+| 12 | Storage — Persistence | | | ☐ |
+| 13 | Storage — Workouts | | | ☐ |
+| 14 | BLE — Advertising | | | ☐ |
+| 15 | BLE — Connect/read | | | ☐ |
+| 16 | BLE — Time sync | | | ☐ |
+| 17 | BLE — Weekday derivation | | | ☐ |
+| 18 | Power — Idle timer | | | ☐ |
+| 19 | Power — Sleep current | | | ☐ |
+| 20 | DateTime — Tick rollover | | | ☐ |
+| 21 | DateTime — Leap year | | | ☐ |
+| 22 | DateTime — Epoch | | | ☐ |
+| 23 | Step counter — Accuracy (regression) | | | ☐ |
+| 24 | Step counter — Noise rejection | | | ☐ |
+| 25 | Activity — Detection | | | ☐ |
+| 26 | Activity — Hysteresis | | | ☐ |
+| 27 | Workout — Lifecycle | | | ☐ |
+| 28 | UI — Screen cycling | | | ☐ |
+| 28b | UI — Timeout/wake | | | ☐ |
+
+### Field Tests
+
+| # | Module | Date Tested | Firmware Commit | Pass/Fail |
+|---|--------|-------------|-----------------|-----------|
+| 29 | Integration — Battery-dead datetime recovery | | | ☐ |
+| 30 | Integration — Walk test (real steps) | | | ☐ |
+| 31 | Integration — Workout flow | | | ☐ |
+| 32 | Integration — BLE sync | | | ☐ |
+| 33 | Integration — Battery life | | | ☐ |
