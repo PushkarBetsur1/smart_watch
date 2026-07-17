@@ -9,7 +9,6 @@ enum PowerState {
 };
 
 bool power_init();
-void power_enter_sleep();
 void power_wake();
 PowerState power_get_state();
 void power_set_state(PowerState state);

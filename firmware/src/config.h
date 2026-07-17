@@ -9,27 +9,23 @@
 #define PIN_OLED_DC     2
 #define PIN_OLED_RST    3
 
-// IMU (I2C on default SDA/SCL)
-#define PIN_IMU_INT1    1
-
 // Button
 #define PIN_BUTTON      0
 
 // Vibration Motor
 #define PIN_VIBRATION   6
 
-// Battery (XIAO built-in VBAT/2 divider)
-#define PIN_BATTERY     A0
-
-// --- I2C Addresses ---
-#define BMI270_ADDR     0x68
+// Battery (XIAO Sense built-in switched divider)
+#define PIN_BATTERY         PIN_VBAT
+#define PIN_BATTERY_ENABLE  VBAT_ENABLE
+#define PIN_CHARGE_STATUS   23
 
 // --- Display Config ---
 #define SCREEN_WIDTH    128
 #define SCREEN_HEIGHT   64
 
 // --- IMU Config ---
-#define IMU_SAMPLE_RATE_HZ  50
+#define IMU_SAMPLE_RATE_HZ  52
 #define IMU_ACCEL_RANGE     4   // +/- 4g
 
 // --- Step Counter Config ---
@@ -79,3 +75,4 @@
 // --- Button Timing ---
 #define BUTTON_DEBOUNCE_MS      50
 #define BUTTON_LONG_PRESS_MS    1000
+#define BUTTON_VERY_LONG_PRESS_MS 3000

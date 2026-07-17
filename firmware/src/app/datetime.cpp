@@ -2,6 +2,7 @@
 #include <string.h>
 
 static DateTime current_dt;
+static bool time_valid = false;
 
 static const char *weekday_names[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
 static const char *month_names[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -13,6 +14,7 @@ void datetime_init() {
     current_dt.year = 2024;
     current_dt.month = 1;
     current_dt.day = 1;
+    time_valid = false;
 }
 
 bool datetime_is_leap_year(uint16_t year) {
@@ -29,6 +31,7 @@ uint8_t datetime_days_in_month(uint8_t month, uint16_t year) {
 }
 
 void datetime_tick() {
+    if (!time_valid) return;
     current_dt.second++;
     if (current_dt.second >= 60) {
         current_dt.second = 0;
@@ -55,10 +58,15 @@ void datetime_tick() {
 
 void datetime_set(const DateTime &dt) {
     current_dt = dt;
+    time_valid = true;
 }
 
 DateTime datetime_get() {
     return current_dt;
+}
+
+bool datetime_is_valid() {
+    return time_valid;
 }
 
 uint32_t datetime_to_epoch(const DateTime &dt) {

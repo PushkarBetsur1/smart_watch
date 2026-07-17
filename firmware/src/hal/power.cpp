@@ -13,13 +13,6 @@ bool power_init() {
     return true;
 }
 
-void power_enter_sleep() {
-    current_state = POWER_SLEEP;
-    __WFE();
-    __SEV();
-    __WFE();
-}
-
 void power_wake() {
     current_state = POWER_ACTIVE;
     last_activity_ms = millis();
@@ -38,6 +31,7 @@ void power_set_state(PowerState state) {
 
 void power_reset_activity_timer() {
     last_activity_ms = millis();
+    current_state = POWER_ACTIVE;
 }
 
 uint32_t power_get_idle_time_ms() {

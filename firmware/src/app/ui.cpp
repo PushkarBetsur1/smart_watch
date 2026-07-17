@@ -24,16 +24,21 @@ static void draw_home_screen() {
     DateTime dt = datetime_get();
     char buf[32];
 
+    if (!datetime_is_valid()) {
+        display_draw_centered_text(2, "TIME NOT SET", 1);
+        display_draw_centered_text(18, "Connect phone", 1);
+    } else {
     // Date line
-    snprintf(buf, sizeof(buf), "%s %s %u",
-             datetime_weekday_str(dt.weekday),
-             datetime_month_str(dt.month),
-             dt.day);
-    display_draw_centered_text(0, buf, 1);
+        snprintf(buf, sizeof(buf), "%s %s %u",
+                 datetime_weekday_str(dt.weekday),
+                 datetime_month_str(dt.month),
+                 dt.day);
+        display_draw_centered_text(0, buf, 1);
 
-    // Time (large)
-    snprintf(buf, sizeof(buf), "%02u:%02u", dt.hour, dt.minute);
-    display_draw_centered_text(14, buf, 3);
+        // Time (large)
+        snprintf(buf, sizeof(buf), "%02u:%02u", dt.hour, dt.minute);
+        display_draw_centered_text(14, buf, 3);
+    }
 
     // Steps
     uint32_t steps = step_counter_get_count();
@@ -57,12 +62,14 @@ static void draw_workout_screen() {
         return;
     }
 
-    // Activity type
-    const char *activity_name = activity_get_name(activity_get_current());
-    display_draw_centered_text(0, activity_name, 1);
-
     if (state == WORKOUT_PAUSED) {
-        display_draw_centered_text(0, "[PAUSED]", 1);
+        display_draw_centered_text(0, "PAUSED", 1);
+    } else if (workout_has_fresh_phone_gps()) {
+        display_draw_centered_text(0, "PHONE GPS", 1);
+    } else if (workout_get_distance_source() == DISTANCE_PHONE_GPS) {
+        display_draw_centered_text(0, "GPS LOST", 1);
+    } else {
+        display_draw_centered_text(0, "DISTANCE EST.", 1);
     }
 
     // Elapsed time
@@ -73,9 +80,13 @@ static void draw_workout_screen() {
     snprintf(buf, sizeof(buf), "%02u:%02u:%02u", hrs, mins, secs);
     display_draw_centered_text(14, buf, 2);
 
-    // Steps in workout
-    snprintf(buf, sizeof(buf), "%lu steps", (unsigned long)workout_get_steps());
-    display_draw_centered_text(36, buf, 1);
+    uint16_t pace = workout_get_current_pace_sec_per_km();
+    if (pace > 0) {
+        snprintf(buf, sizeof(buf), "Pace %u:%02u /km", pace / 60, pace % 60);
+    } else {
+        snprintf(buf, sizeof(buf), "Pace --:-- /km");
+    }
+    display_draw_centered_text(34, buf, 1);
 
     // Distance
     uint32_t dist = workout_get_distance_m();
@@ -86,11 +97,11 @@ static void draw_workout_screen() {
     } else {
         snprintf(buf, sizeof(buf), "%lu m", (unsigned long)dist);
     }
-    display_draw_centered_text(48, buf, 1);
+    display_draw_centered_text(45, buf, 1);
 
-    // Calories
-    snprintf(buf, sizeof(buf), "%u cal", workout_get_calories());
-    display_draw_centered_text(58, buf, 1);
+    snprintf(buf, sizeof(buf), "%lu steps  %u spm",
+             (unsigned long)workout_get_steps(), step_counter_get_cadence());
+    display_draw_centered_text(56, buf, 1);
 }
 
 static void draw_stats_screen() {
@@ -165,8 +176,15 @@ void ui_handle_button(ButtonEvent event) {
                 } else if (state == WORKOUT_ACTIVE) {
                     workout_pause();
                 } else if (state == WORKOUT_PAUSED) {
-                    workout_stop();
+                    workout_resume();
                 }
+            }
+            break;
+
+        case BUTTON_VERY_LONG_PRESS:
+            if (workout_get_state() != WORKOUT_STOPPED) {
+                workout_stop();
+                current_screen = SCREEN_WORKOUT;
             }
             break;
 

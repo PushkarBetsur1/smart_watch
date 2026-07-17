@@ -12,7 +12,8 @@ enum UiScreen : uint8_t {
 enum ButtonEvent : uint8_t {
     BUTTON_NONE = 0,
     BUTTON_SHORT_PRESS,
-    BUTTON_LONG_PRESS
+    BUTTON_LONG_PRESS,
+    BUTTON_VERY_LONG_PRESS
 };
 
 void ui_init();

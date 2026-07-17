@@ -50,6 +50,27 @@ static void on_time_sync(const DateTime &dt) {
     storage_save_datetime(epoch);
 }
 
+static void on_phone_gps(const PhoneGpsUpdate &update) {
+    if (!update.has_fix) return;
+
+    workout_update_phone_gps(
+        (update.distance_cm + 50) / 100,
+        update.speed_cm_per_sec,
+        (update.accuracy_cm + 50) / 100
+    );
+}
+
+static void on_workout_stopped(const WorkoutSession &session) {
+    WorkoutRecord record;
+    record.timestamp = datetime_is_valid() ? datetime_to_epoch(datetime_get()) : 0;
+    record.duration_sec = session.elapsed_ms / 1000;
+    record.steps = session.current_steps;
+    record.distance_m = session.distance_m;
+    record.calories = session.calories;
+    record.activity_type = (uint8_t)session.activity;
+    storage_save_workout(record);
+}
+
 // --- Sensor Task (50 Hz) ---
 static void sensor_task(void *param) {
     (void)param;
@@ -96,15 +117,16 @@ static void ui_task(void *param) {
 
             if (digitalRead(PIN_BUTTON) == LOW) {
                 // Still pressed — wait for release or long press timeout
-                uint32_t wait_start = millis();
-                while (digitalRead(PIN_BUTTON) == LOW) {
-                    if (millis() - hold_start >= BUTTON_LONG_PRESS_MS) {
-                        break;
-                    }
+                while (digitalRead(PIN_BUTTON) == LOW &&
+                       millis() - hold_start < BUTTON_VERY_LONG_PRESS_MS) {
                     vTaskDelay(pdMS_TO_TICKS(10));
                 }
 
-                if (millis() - hold_start >= BUTTON_LONG_PRESS_MS) {
+                uint32_t held_ms = millis() - hold_start;
+                if (held_ms >= BUTTON_VERY_LONG_PRESS_MS) {
+                    ui_handle_button(BUTTON_VERY_LONG_PRESS);
+                    vibration_pulse(250);
+                } else if (held_ms >= BUTTON_LONG_PRESS_MS) {
                     ui_handle_button(BUTTON_LONG_PRESS);
                     vibration_pulse(100);
                 } else {
@@ -132,15 +154,17 @@ static void ble_task(void *param) {
             ble_update_steps(step_counter_get_count());
             ble_update_battery(battery_read_percent());
 
-            if (workout_get_state() == WORKOUT_ACTIVE) {
-                BleWorkoutData wd;
-                wd.steps = workout_get_steps();
-                wd.distance_m = workout_get_distance_m();
-                wd.elapsed_sec = workout_get_elapsed_sec();
-                wd.calories = workout_get_calories();
-                wd.activity = (uint8_t)activity_get_current();
-                ble_update_workout(wd);
-            }
+            BleWorkoutData wd;
+            wd.version = 1;
+            wd.state = (uint8_t)workout_get_state();
+            wd.flags = workout_has_fresh_phone_gps() ? 0x01 : 0x00;
+            wd.activity = (uint8_t)activity_get_current();
+            wd.steps = workout_get_steps();
+            wd.distance_m = workout_get_distance_m();
+            wd.elapsed_sec = workout_get_elapsed_sec();
+            wd.current_pace_sec_per_km = workout_get_current_pace_sec_per_km();
+            wd.average_pace_sec_per_km = workout_get_average_pace_sec_per_km();
+            ble_update_workout(wd);
         }
 
         vTaskDelayUntil(&last_wake, period);
@@ -158,11 +182,10 @@ static void power_task(void *param) {
     while (true) {
         uint32_t idle_ms = power_get_idle_time_ms();
 
-        if (idle_ms > SLEEP_TIMEOUT_MS && workout_get_state() == WORKOUT_STOPPED) {
+        if (idle_ms > SLEEP_TIMEOUT_MS && workout_get_state() == WORKOUT_STOPPED &&
+            power_get_state() != POWER_IDLE) {
             power_set_state(POWER_IDLE);
-            imu_sleep();
 
-            // Save state before deep idle
             DailySteps daily;
             DateTime dt = datetime_get();
             daily.year = dt.year;
@@ -172,7 +195,9 @@ static void power_task(void *param) {
             daily.distance_m = (daily.steps * user_settings.stride_cm) / 100;
             daily.calories = 0;
             storage_save_daily_steps(daily);
-            storage_save_datetime(datetime_to_epoch(dt));
+            if (datetime_is_valid()) {
+                storage_save_datetime(datetime_to_epoch(dt));
+            }
         }
 
         // Periodic save every 5 minutes
@@ -180,7 +205,9 @@ static void power_task(void *param) {
         if (now_sec - last_save_sec >= 300) {
             last_save_sec = now_sec;
             DateTime dt = datetime_get();
-            storage_save_datetime(datetime_to_epoch(dt));
+            if (datetime_is_valid()) {
+                storage_save_datetime(datetime_to_epoch(dt));
+            }
 
             DailySteps daily;
             daily.year = dt.year;
@@ -219,14 +246,8 @@ void setup() {
     // Load settings
     storage_load_settings(user_settings);
 
-    // Initialize datetime from flash
-    uint32_t saved_epoch = storage_load_datetime();
-    if (saved_epoch > 0) {
-        DateTime dt = datetime_from_epoch(saved_epoch);
-        datetime_set(dt);
-    } else {
-        datetime_init();
-    }
+    // No battery-backed RTC: time is invalid after every power cycle until phone sync.
+    datetime_init();
 
     // Initialize IMU
     if (!imu_init()) {
@@ -241,11 +262,13 @@ void setup() {
     step_counter_init();
     activity_init();
     workout_init();
+    workout_set_stop_callback(on_workout_stopped);
     ui_init();
 
     // Initialize BLE
     ble_init();
     ble_set_time_sync_callback(on_time_sync);
+    ble_set_phone_gps_callback(on_phone_gps);
     ble_start_advertising();
 
     // Button interrupt

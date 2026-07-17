@@ -1,517 +1,173 @@
-# DIY Fitness Smartwatch — Version 1 Design
+# Phone-Assisted Running Watch - Version 1 Design
 
-## Overview
+## Product Definition
 
-This project is a custom-built fitness smartwatch focused on core activity tracking while maintaining low hardware cost, low power consumption, and a modular firmware architecture. The goal is to create a wearable capable of tracking workouts, counting steps, estimating distance, displaying the current time, and synchronizing data with a companion application over Bluetooth Low Energy (BLE).
+Version 1 is a wrist-worn running computer that uses a paired phone for GPS. The watch owns workout controls, display, cadence estimate, step estimate, haptics, local records, and BLE. The phone owns location permission, GPS sampling, route recording, and cumulative GPS distance.
 
-The project will begin as a development-board prototype before evolving into a custom PCB and wearable enclosure.
+This split keeps the first prototype close to $60, avoids a large GNSS antenna and its power load, and lets the running workflow be tested before committing to standalone GPS hardware.
 
----
+## V1 Goals
 
-# Project Goals
+- Current time after phone synchronization
+- Start, pause, resume, and stop a run from the watch
+- Elapsed active time
+- Phone-GPS distance
+- Current and average pace
+- Wrist-derived cadence and step estimate
+- Haptic control feedback and future interval alerts
+- Battery monitoring
+- Local completed-workout records
+- Live workout synchronization over BLE
+- At least one full day of normal prototype use, to be verified on hardware
 
-## Primary Objectives
+## Explicit Non-Goals
 
-* Display current time
-* Accurate step counting
-* Walking/running detection
-* Workout timer
-* Distance estimation
-* Pace estimation
-* Calorie estimation
-* Battery monitoring
-* Bluetooth synchronization
-* Store workout history
-* Low-power operation
+- Standalone GPS
+- Optical heart rate
+- Running power
+- Elevation
+- VO2 max
+- Waterproofing
+- Apple-level automatic workout detection
+- Medical or training-grade calorie accuracy
 
-## Future Objectives
+Standalone GNSS and optical heart rate are possible later revisions, not hidden assumptions in V1.
 
-* Heart rate monitoring
-* GPS tracking
-* Sleep tracking
-* OTA firmware updates
-* Waterproof enclosure
-* Custom PCB Revision 2
-* Companion mobile application
+## Hardware
 
----
+### Controller and Motion Sensor
 
-# Hardware
+Use the **Seeed Studio XIAO nRF52840 Sense**, not the base XIAO plus an external IMU. The Sense board provides:
 
-## Microcontroller
+- nRF52840 BLE MCU
+- Onboard LSM6DS3TR-C six-axis IMU
+- Onboard 32.768 kHz LF crystal
+- USB-C programming and charging
+- Built-in switched battery measurement
+- 2 MB external flash, although V1 uses internal LittleFS for its small records
 
-**Selected MCU**
+Do not add a BMI270 breakout, external watch crystal, TP4056 charger, or separate regulator to V1.
 
-* Nordic nRF52840
+### Display, Controls, and Haptics
 
-Reasons:
+- 1.3 inch, 128 x 64 monochrome SSD1306 OLED using four-wire SPI
+- One normally-open tactile button from D0 to GND
+- One 3 V coin vibration motor driven through a logic-level N-channel MOSFET
+- Flyback diode across the motor
+- Display shuts off after five seconds by default
 
-* Excellent BLE support
-* Extremely low power consumption
-* Large developer ecosystem
-* Suitable for wearable devices
-* Compatible with Zephyr RTOS and PlatformIO
+### Battery
 
-**Dev Board (Prototype)**
+- Protected 3.7 V LiPo, 400-500 mAh
+- Battery connects directly to the XIAO battery pads with verified polarity
+- Charging uses the XIAO onboard charger through USB-C
+- V1 must not include a second charger module
 
-* Seeed XIAO nRF52840
+Battery-life numbers remain targets until measured on assembled hardware. The firmware keeps the display off when idle but currently samples motion continuously for daily steps. It does not claim a sub-20 uA whole-system sleep state.
 
----
+## Running Data Model
 
-## Timekeeping Crystal
+### GPS Ownership
 
-* 32.768 kHz watch crystal (external LFCLK source)
+During an active workout, the phone sends a GPS update once per second containing a valid-fix flag, cumulative workout distance, filtered horizontal speed, and horizontal accuracy.
 
-Required for accurate RTC operation. The nRF52840's internal RC oscillator drifts ~250 ppm (~20 seconds/day), making daily BLE resyncs necessary. An external 32.768 kHz crystal reduces drift to ~20 ppm (~1.7 seconds/day), acceptable for normal wearable use without frequent syncing.
+The phone must reject poor locations and prevent cumulative distance from moving backward. The watch treats phone distance as authoritative after the first valid update.
 
----
+Before the first valid phone update, the watch labels step-based distance as an estimate. If updates stop for more than five seconds after GPS has been acquired, the watch displays `GPS LOST` and retains the last accepted distance.
 
-## Sensors
+### Pace
 
-### Required
-
-6-axis IMU
-
-Recommended:
-
-* Bosch BMI270
-
-The BMI270 offers:
-
-* Integrated step counter
-* Activity recognition
-* Lower power consumption
-* Better noise characteristics than older IMUs
-
----
-
-### Optional (Future)
-
-* MAX30102 Heart Rate Sensor
-* GPS Module
-* Barometer
-
----
-
-## Display
-
-* 1.3" OLED
-* 128×64 pixels
-
-Power-saving requirements:
-
-* Automatic screen timeout
-* Adjustable brightness
-* Wake on wrist movement
-* Minimal refresh rate while idle
-
----
-
-## Storage
-
-Persistent storage is required for:
-
-* User settings
-* Workout history
-* Daily step totals
-* Calibration data
-
-Version 1 will use the nRF52840's internal flash.
-
-External SPI flash may be added in later revisions if additional storage becomes necessary.
-
----
-
-## Inputs
-
-* One multifunction button
-
-Future revisions:
-
-* Two buttons
-* Capacitive touch
-
----
-
-## Haptics
-
-* Coin vibration motor
-
-Used for:
-
-* Workout start/stop confirmation
-* Goal notifications
-* Low battery alerts
-* Button feedback
-
----
-
-## Power
-
-* 300–500 mAh LiPo battery
-* USB-C charging
-* Battery voltage monitoring via GPIO-switched voltage divider (divider powered only during ADC measurement to avoid continuous current drain at sleep scale)
-* LDO regulator: verify quiescent current (Iq) is compatible with sleep budget before PCB commit — AP2112K is acceptable for prototyping but lower-Iq alternatives may be needed for full battery life targets
-
-Target battery life:
-
-* 2–3 days under normal usage (assumes 15–25% screen-on time during active use; idle-heavy use may reach 4+ days)
-
----
-
-# Software Architecture
+Current pace is calculated from phone speed:
 
 ```text
-Application
-│
-├── Workout Manager
-├── UI Manager
-├── Activity Detection
-├── Step Counter
-└── BLE Manager
-        │
-Hardware Abstraction Layer (HAL)
-│
-├── IMU Driver
-├── Display Driver
-├── Storage Driver
-├── Battery Driver
-├── BLE Driver
-└── Vibration Driver
+pace_sec_per_km = 100000 / speed_cm_per_sec
 ```
 
-The HAL separates hardware-specific drivers from application logic, making future hardware revisions significantly easier.
-
----
-
-# System State Machine
+Average pace is calculated from active elapsed time and GPS distance:
 
 ```text
-Boot
- │
- ▼
-Idle Watch
- │
- ├──────────────┐
- ▼              │
-Workout         │
- │              │
- ▼              │
-Pause           │
- │              │
- └──────┐       │
-        ▼       │
-Sync with Phone │
-        │       │
-        ▼       │
-Sleep ◄─────────┘
+average_pace_sec_per_km = elapsed_ms / distance_m
 ```
 
----
+The phone should filter speed over approximately 5-10 seconds. It must not send noisy raw point-to-point speed as a precise current pace.
 
-# Firmware Modules
+### Cadence and Steps
+
+The onboard LSM6DS3TR-C is sampled at 52 Hz. V1 uses an acceleration-magnitude peak detector. This is prototype logic and must be calibrated from recorded wrist data before any accuracy claim is made.
+
+Cadence is independent from GPS. GPS distance remains authoritative during a workout.
+
+## Workout Controls
+
+- Short press: wake display or cycle screens
+- Hold for at least 1 second: start, pause, or resume
+- Hold for at least 3 seconds: stop and save the workout
+
+Completed workouts are written to LittleFS. A record contains timestamp when available, duration, steps, distance, calories, and detected activity.
+
+The board has no battery-backed real-time clock. After every reboot, time remains explicitly invalid until phone sync. Records use timestamp `0` when time is invalid rather than pretending a saved pre-shutdown clock is current.
+
+## BLE Contract
+
+The custom service UUID is `00001000-0000-1000-8000-00805f9b34fb`.
+
+| Characteristic | UUID suffix | Direction | Size |
+|---|---:|---|---:|
+| Daily steps | `1001` | Watch notify/read | 4 bytes |
+| Battery | `1002` | Watch notify/read | 1 byte |
+| Workout telemetry | `1003` | Watch notify/read | 20 bytes |
+| Time sync | `1004` | Phone write | 7 bytes |
+| Phone GPS | `1006` | Phone write | 10 bytes |
+
+All multibyte values are unsigned little-endian. Protocol version 1 uses open GATT for prototype development. Do not send route coordinates to the watch. Pairing and bonding are required before treating this as a personal-data product.
+
+## Firmware Architecture
 
 ```text
-src/
-
-app/
-    workout.cpp
-    workout.h
-
-    step_counter.cpp
-    step_counter.h
-
-    activity.cpp
-    activity.h
-
-    ui.cpp
-    ui.h
-
-hal/
-    imu.cpp
-    imu.h
-
-    display.cpp
-    display.h
-
-    battery.cpp
-    battery.h
-
-    ble.cpp
-    ble.h
-
-    storage.cpp
-    storage.h
-
-    vibration.cpp
-    vibration.h
-
-    power.cpp
-    power.h
-
-main.cpp
+Phone location service
+        |
+        | BLE GPS update, 1 Hz
+        v
+BLE service --> Workout manager --> UI / local record
+                    ^
+                    |
+LSM6DS3 --> step and cadence estimator
 ```
 
----
+The hardware abstraction layer contains display, IMU, battery, storage, vibration, BLE, and power-state helpers. Application modules own time, activity, workout calculations, step estimation, and screens.
 
-# Core Features
+## Delivery Stages
 
-## Date and Time
+### Stage 1 - Bench Prototype
 
-Version 1:
+- Assemble the exact BOM in `SYSTEM_ARCHITECTURE.md`
+- Flash and run the complete firmware
+- Validate display, button, motor, IMU, battery ADC, storage, and BLE
+- Send synthetic phone-GPS packets with nRF Connect
 
-* Full date/time tracked (year, month, day, weekday, hour, minute, second)
-* Internal MCU RTC increments every second
-* Date and time synchronized from phone via BLE
-* Stored to flash between sessions
-* Handles month lengths and leap years
+### Stage 2 - Wearable and Phone GPS
 
-Future:
+- Build a minimal phone companion that records GPS in the foreground
+- Stream version 1 GPS packets at 1 Hz
+- Strap the watch securely to the wrist
+- Run measured outdoor routes and compare against a trusted reference
 
-* Dedicated external RTC (DS3231) if long-term standalone accuracy becomes necessary
+### Stage 3 - Calibration and Power
 
----
+- Capture labeled walking, running, desk-work, and vehicle IMU logs
+- Tune cadence and false-step rejection from those logs
+- Measure current with display on, display off, BLE connected, and during vibration
+- Set battery expectations from measurements, not component datasheets
 
-## Step Counter
+### Stage 4 - Optional Standalone Hardware
 
-V1 uses the BMI270's onboard hardware step-counting engine. The sensor runs the algorithm internally and raises an interrupt on each detected step, keeping the MCU fully asleep between events and drawing only ~3.5 µA.
+Only after V1 is useful, evaluate a modern low-power GNSS module, antenna placement, larger battery, and enclosure changes. That is expected to add roughly $23-40.
 
-Software peak-detection on raw 50–100 Hz data is deferred to a future revision for applications requiring finer-grained cadence analysis or custom gait metrics.
+## Success Criteria
 
----
-
-## Activity Detection
-
-Activities:
-
-* Idle
-* Walking
-* Running
-
-Version 1 will use adaptive thresholds and cadence analysis.
-
-Future revisions may incorporate frequency-domain analysis or sensor fusion.
-
----
-
-## Workout Mode
-
-Tracks:
-
-* Start time
-* Elapsed time
-* Current steps
-* Distance
-* Average pace
-* Calories
-* Battery percentage
-
----
-
-## Distance Estimation
-
-Formula:
-
-Distance = Step Count × Stride Length
-
-Stride length will be user configurable.
-
-Distance is stride-based, not GPS-derived. The UI labels this readout as an estimate (e.g., "~1.92 km (est.)") so users are not misled into expecting GPS-grade accuracy.
-
----
-
-## Calories
-
-Estimated from:
-
-* User weight
-* Distance
-* Activity type
-
-Values are approximate.
-
----
-
-## Bluetooth Low Energy
-
-Custom GATT service will expose:
-
-* Current workout
-* Daily steps
-* Battery percentage
-* Device settings
-* Workout history
-
-Security:
-
-* V1 uses an open GATT service — accepted tradeoff for prototype simplicity
-* V2 targets LE Secure Connections pairing/bonding so nearby devices cannot read workout history or write bogus time/settings
-
-Future revisions may add:
-
-* Phone notifications
-* OTA firmware updates
-
----
-
-# Display
-
-## Home Screen
-
-```text
-Mon Jun 30
-
-10:42
-
-Steps: 5,382
-
-Battery: 82%
-```
-
-## Workout Screen
-
-```text
-Running
-
-Time
-00:21:43
-
-Steps
-2,486
-
-Distance
-1.92 km
-```
-
----
-
-# Logging
-
-A lightweight logging interface will be used during development.
-
-Example:
-
-```cpp
-LOG_INFO("Workout started");
-LOG_WARN("Battery low");
-LOG_ERROR("BLE disconnected");
-```
-
-Logging can be disabled for production firmware.
-
----
-
-# Development Stages
-
-## Stage 1 — Prototype
-
-Hardware:
-
-* Seeed XIAO nRF52840 dev board
-* BMI270 breakout (Adafruit or SparkFun)
-* 1.3" SSD1306 OLED (SPI)
-* LiPo battery (300–500 mAh, JST-PH)
-* 32.768 kHz watch crystal
-
-Goals:
-
-* Read IMU
-* Display time
-* Count steps
-* Display battery level
-* BLE communication
-
----
-
-## Stage 2 — Firmware Improvements
-
-Goals:
-
-* Adaptive step detection
-* Walking/running detection
-* Calibration mode
-* Persistent storage
-* Improved power management
-
----
-
-## Stage 3 — Custom PCB
-
-Integrate:
-
-* nRF52840
-* 32.768 kHz crystal (LFCLK)
-* BMI270
-* Battery charging
-* Display connector
-* Vibration motor
-* Programming header
-* Battery connector
-* GPIO-switched battery voltage divider
-
----
-
-## Stage 4 — Wearable Prototype
-
-Goals:
-
-* Compact enclosure
-* Comfortable wrist strap
-* USB-C charging
-* Optimized battery life
-
----
-
-# Testing & Calibration
-
-Calibration mode will allow:
-
-* Walking a known number of steps
-* Measuring detection accuracy
-* Adjusting stride length
-* Validating distance estimation
-
-Target accuracy:
-
-* ≥95% step-count accuracy during normal walking and running
-
----
-
-# Future Features
-
-* Heart rate monitoring
-* GPS route tracking
-* Sleep tracking
-* Interval workouts
-* Lap timer
-* BLE notifications
-* OTA firmware updates
-* Data export (CSV/GPX)
-* Multiple watch faces
-* Weather synchronization
-
----
-
-# Build System
-
-Prototype:
-
-* PlatformIO
-
-Future evaluation:
-
-* Zephyr RTOS
-
-The project structure is intentionally modular so that migrating to an RTOS later requires minimal changes to application logic.
-
----
-
-# Success Criteria
-
-* ≥95% step-count accuracy
-* 2–3 day battery life
-* Stable BLE synchronization
-* Persistent workout history
-* Responsive user interface
-* Modular firmware architecture
-* Compact wearable prototype
+- A run can be started, paused, resumed, stopped, and recovered from storage
+- GPS distance is within 3% of a trusted reference on an open-sky 5 km route
+- Average pace is within 5 seconds per kilometer of the reference
+- Cadence is within 5 steps per minute of a manually counted 60-second interval
+- A GPS disconnect is visible within 6 seconds and does not reset distance
+- No false claim is made for unsynchronized time, estimated distance, or unmeasured battery life

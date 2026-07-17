@@ -65,7 +65,7 @@ bool storage_load_daily_steps(DailySteps &steps) {
 
 bool storage_save_workout(const WorkoutRecord &record) {
     if (workout_file.open(WORKOUT_FILENAME, FILE_O_WRITE)) {
-        workout_file.seek(0, SeekEnd);
+        workout_file.seek(workout_file.size());
         workout_file.write((const uint8_t *)&record, sizeof(WorkoutRecord));
         workout_file.close();
         return true;
